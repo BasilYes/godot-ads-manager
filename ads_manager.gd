@@ -3,6 +3,7 @@ extends Node
 
 enum AdProvider {
 	NO_ADS,
+	FAKE_ADS,
 	YANDEX_MOBILE,
 	YANDEX_GAMES
 }
@@ -10,23 +11,25 @@ enum AdProvider {
 
 signal interstitial_ad_clicked()
 signal interstitial_ad_show_result(result: bool)
-signal interstitial_ad_impression_result(result: bool)
+signal interstitial_ad_closed()
 
 signal rewarded_ad_clicked()
 signal rewarded_ad_show_result(result: bool)
 signal rewarded_ad_impression_result(rewarded: bool)
+signal rewarded_ad_closed(rewarded: bool)
 
 
 var _ad_provider: AdProvider = AdProvider.NO_ADS
 var _ad_singleton: Node = null
 var _is_ad_processing: bool = false
-
+var _rewarded: bool = false
 
 func _ready() -> void:
-	rewarded_ad_impression_result.connect(func(result: bool) -> void:
+	rewarded_ad_closed.connect(func(rewarded: bool) -> void:
 			_mute_sound(false)
-			_is_ad_processing = false)
-	interstitial_ad_impression_result.connect(func(result: bool) -> void:
+			_is_ad_processing = false
+			_rewarded = false)
+	interstitial_ad_closed.connect(func() -> void:
 			_mute_sound(false)
 			_is_ad_processing = false)
 	if has_node("/root/YandexAds") and get_node("/root/YandexAds").is_working():
@@ -40,10 +43,10 @@ func _ready() -> void:
 					interstitial_ad_show_result.emit(true))
 		_plugin_singleton.interstitial_ad_failed_to_show.connect(
 				func():
-					interstitial_ad_impression_result.emit(false))
+					interstitial_ad_show_result.emit(false))
 		_plugin_singleton.interstitial_ad_dismissed.connect(
 				func():
-					interstitial_ad_impression_result.emit(true))
+					interstitial_ad_closed.emit())
 		_plugin_singleton.interstitial_ad_clicked.connect(
 				func(): interstitial_ad_clicked.emit())
 
@@ -55,9 +58,12 @@ func _ready() -> void:
 					rewarded_ad_show_result.emit(false))
 		_plugin_singleton.rewarded_ad_dismissed.connect(
 				func():
+					if not _rewarded:
+						rewarded_ad_impression_result.emit(false)
 					rewarded_ad_impression_result.emit(false))
 		_plugin_singleton.rewarded_ad_rewarded.connect(
 				func():
+					_rewarded = true
 					rewarded_ad_impression_result.emit(true))
 		_plugin_singleton.rewarded_ad_clicked.connect(
 				func(): rewarded_ad_clicked.emit())
@@ -74,9 +80,12 @@ func _ready() -> void:
 					"opened":
 						rewarded_ad_show_result.emit(true)
 					"rewarded":
+						_rewarded = true
 						rewarded_ad_impression_result.emit(true)
 					"closed":
-						rewarded_ad_impression_result.emit(false)
+						if not _rewarded:
+							rewarded_ad_impression_result.emit(false)
+						rewarded_ad_closed.emit(_rewarded)
 					"error":
 						rewarded_ad_show_result.emit(false)
 				)
@@ -85,19 +94,28 @@ func _ready() -> void:
 					return
 				match result:
 					"closed":
-						interstitial_ad_impression_result.emit(true)
+						interstitial_ad_closed.emit(true)
 					"error":
 						interstitial_ad_show_result.emit(false)
 					"opened":
 						interstitial_ad_show_result.emit(true)
 				)
+	elif "fake_ads" in OS.get_cmdline_args() and OS.is_debug_build():
+		_ad_provider = AdProvider.FAKE_ADS
+		_ad_singleton = self
 	print("Ads provider ", AdProvider.keys()[_ad_provider])
 
 
 func show_interstitial_ad() -> bool:
-	if _ad_singleton:
+	if is_working():
 		_is_ad_processing = true
-		_ad_singleton.show_interstitial_ad()
+		match _ad_provider:
+			AdProvider.FAKE_ADS:
+				var fake: AMFakeAd = preload("uid://dpoyxge8ps7fo").instantiate()
+				fake.run.call_deferred(false)
+				add_child(fake)
+			_:
+				_ad_singleton.show_interstitial_ad()
 		var shown: bool = await interstitial_ad_show_result
 		if shown:
 			_mute_sound(true)
@@ -110,9 +128,15 @@ func show_interstitial_ad() -> bool:
 
 
 func show_rewarded_ad() -> bool:
-	if _ad_singleton:
+	if is_working():
 		_is_ad_processing = true
-		_ad_singleton.show_rewarded_ad()
+		match _ad_provider:
+			AdProvider.FAKE_ADS:
+				var fake: AMFakeAd = preload("uid://dpoyxge8ps7fo").instantiate()
+				fake.run.call_deferred(true)
+				add_child(fake)
+			_:
+				_ad_singleton.show_interstitial_ad()
 		var shown: bool = await rewarded_ad_show_result
 		if shown:
 			_mute_sound(true)
@@ -122,6 +146,16 @@ func show_rewarded_ad() -> bool:
 	else:
 		rewarded_ad_show_result.emit(false)
 		return false
+
+
+func is_working() -> bool:
+	return is_instance_valid(_ad_singleton)
+
+
+func _create_fake_ad(revarded: bool = false) -> void:
+	var fake: AMFakeAd = preload("res://addons/godot-ads-manager/fake_ad.tscn").instantiate()
+	fake.run(revarded)
+	add_child(fake)
 
 
 func get_ads_provider() -> AdProvider:
