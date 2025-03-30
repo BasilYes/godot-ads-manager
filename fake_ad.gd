@@ -6,6 +6,7 @@ var rewarded: bool = false
 var impressed: bool = false
 
 func run(rewarded: bool) -> void:
+	impressed = false
 	self.rewarded = rewarded
 	if rewarded:
 		AdsManager.rewarded_ad_show_result.emit(true)
@@ -17,7 +18,7 @@ func _on_close_button_pressed() -> void:
 	if rewarded:
 		if not impressed:
 			AdsManager.rewarded_ad_impression_result.emit(false)
-		AdsManager.rewarded_ad_closed.emit(true)
+		AdsManager.rewarded_ad_closed.emit(impressed)
 	else:
 		AdsManager.interstitial_ad_closed.emit()
 	queue_free()
